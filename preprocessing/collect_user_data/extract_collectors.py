@@ -9,9 +9,9 @@ errors) so nothing is lost.
 
 Usage
 -----
-    python3 extract_collectors.py result.csv
-    python3 extract_collectors.py result.csv -o collectors.csv
-    python3 extract_collectors.py result.csv --include-unknown
+    python3 extract_collectors.py privacy_policy_section.csv
+    python3 extract_collectors.py privacy_policy_section.csv -o collectors.csv
+    python3 extract_collectors.py privacy_policy_section.csv --include-unknown
 """
 
 from __future__ import annotations

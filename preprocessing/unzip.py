@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-unzip.py --zipped-dir <input_directory> --out <output_directory> [--workers N]
+unzip.py --zipped-dir <input_directory> --out <output_directory> [--workers N] [--limit N] [--ignore-list-csv <path>]
 
 Extracts Chrome (.crx), Firefox (.xpi), and generic .zip extension files
 from the zipped directory into the output directory. Each archive is unpacked
@@ -9,6 +9,7 @@ into a separate folder named after the archive file (without extension).
 
 import argparse
 import concurrent.futures
+import csv
 import io
 import os
 import sys
@@ -60,6 +61,27 @@ def extract_zip(zip_path: Path, out_dir: Path) -> None:
         zip_ref.extractall(out_dir)
 
 
+def load_ignored_ids(csv_path: Path) -> set:
+    """Read extension IDs from index 0 of each row in the CSV file."""
+    ignored = set()
+    if not csv_path.is_file():
+        print(f"Warning: Ignore list CSV '{csv_path}' does not exist.", file=sys.stderr)
+        return ignored
+
+    try:
+        with open(csv_path, mode="r", encoding="utf-8", newline="") as f:
+            reader = csv.reader(f)
+            for row in reader:
+                if row and len(row) > 0:
+                    ext_id = row[0].strip()
+                    if ext_id:
+                        ignored.add(ext_id)
+    except Exception as e:
+        print(f"Error reading ignore list CSV: {e}", file=sys.stderr)
+    
+    return ignored
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Extract browser extension archives (.crx, .xpi, .zip) from a directory."
@@ -76,6 +98,14 @@ def main():
         "-w", "--workers", type=int, default=1,
         help="Number of workers for unzipping (default: 1)"
     )
+    parser.add_argument(
+        "-l", "--limit", type=int, default=None,
+        help="Maximum number of extension files to process"
+    )
+    parser.add_argument(
+        "--ignore-list-csv", type=str, default=None,
+        help="Path to a CSV file containing extension IDs to ignore at index 0"
+    )
     args = parser.parse_args()
 
     input_dir = Path(args.zipped_dir)
@@ -88,11 +118,34 @@ def main():
     # Create output directory if it doesn't exist
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Load ignore list if provided
+    ignored_ids = set()
+    if args.ignore_list_csv:
+        ignored_ids = load_ignored_ids(Path(args.ignore_list_csv))
+        if ignored_ids:
+            print(f"Loaded {len(ignored_ids)} extension ID(s) to ignore from CSV.")
+
     # Collect files to process
-    files = [f for f in input_dir.iterdir() if f.is_file()]
+    all_files = [f for f in input_dir.iterdir() if f.is_file()]
+
+    if not all_files:
+        print(f"No files found in '{input_dir}'.")
+        return
+
+    # Filter out ignored extensions based on file stem or full filename
+    files = []
+    for f in all_files:
+        if f.stem in ignored_ids or f.name in ignored_ids:
+            print(f"Skipping ignored extension: {f.name}")
+            continue
+        files.append(f)
+
+    # Apply limit if specified
+    if args.limit is not None and args.limit >= 0:
+        files = files[:args.limit]
 
     if not files:
-        print(f"No files found in '{input_dir}'.")
+        print("No files remaining to process after applying filters and limits.")
         return
 
     total_files = len(files)
@@ -112,11 +165,11 @@ def main():
                 extract_zip(file_path, out_subdir)
                 return True, file_path.name, out_subdir
             else:
-                return False, file_path.name, "Skipping unsupported file"
+                return False, file_path.name, "Skipping unsupported file format"
         except Exception as e:
             return False, file_path.name, f"Failed to extract: {e}"
 
-    print(f"Starting unzipping with {args.workers} workers...")
+    print(f"\nStarting unzipping of {total_files} file(s) with {args.workers} worker(s)...")
     success_count = 0
     error_count = 0
 
@@ -127,12 +180,12 @@ def main():
             success, fname, msg = future.result()
             if success:
                 success_count += 1
-                print(f"[{done_count}/{total_files}] {fname} to {msg}")
+                print(f"[{done_count}/{total_files}] Extracted {fname} to {msg}")
             else:
                 error_count += 1
                 print(f"[{done_count}/{total_files}] {msg} ({fname})", file=sys.stderr)
 
-    print(f"\nProcessed:{total_files} Success:{success_count} Error:{error_count}")
+    print(f"\nProcessed: {total_files} | Success: {success_count} | Error: {error_count}")
 
 
 if __name__ == "__main__":
